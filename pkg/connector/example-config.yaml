@@ -19,6 +19,10 @@ mute_chats_by_default: false
 # event in the room. Matrix→Teams deletions are always permanent.
 mark_deleted_as_edit: false
 
+# Upload the Microsoft Teams logo and use it as the avatar of the bridge's
+# rooms and space. Set to false to keep the logo out of Matrix.
+upload_network_icon: true
+
 # Which Teams thread classes to enumerate on startup. Threads excluded here
 # can still surface on demand if a Trouter message arrives in them.
 sync_channels:        true   # Team channels (19:...@thread.tacv2)

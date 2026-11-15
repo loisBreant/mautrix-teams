@@ -574,7 +574,7 @@ func TestFetchSharedFileFallsBackToGraph(t *testing.T) {
 	t.Cleanup(tokens.Close)
 	const share = "https://contoso-my.sharepoint.com/:u:/g/personal/bob/EabcXYZ"
 	wantPath := "/shares/u!" + base64.RawURLEncoding.EncodeToString([]byte(share)) + "/driveItem/content"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/_layouts/15/download.aspx"):
 			w.WriteHeader(http.StatusForbidden)
@@ -601,11 +601,12 @@ func TestFetchSharedFileFallsBackToGraph(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 	c.tokenEndpointForTest = tokens.URL
 	c.graphURLForTest = srv.URL
+	routeHostTo(c, srv, "contoso-my.sharepoint.com")
 
 	data, ctype, err := c.FetchSharedFile(context.Background(), SharedFile{
 		Name:     "report.zip",
 		ItemID:   "00000000-0000-0000-0000-0000000000f1",
-		SiteURL:  srv.URL + "/personal/bob/",
+		SiteURL:  "https://contoso-my.sharepoint.com/personal/bob/",
 		ShareURL: share,
 	})
 	if err != nil {
@@ -636,7 +637,7 @@ func TestFetchSharedFileRefusesAPageForTheFile(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			graphAsked := false
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.HasSuffix(r.URL.Path, "/_layouts/15/download.aspx") {
 					w.Header().Set("Content-Type", tc.sharePoint)
 					_, _ = w.Write([]byte("sharepoint"))
@@ -653,11 +654,12 @@ func TestFetchSharedFileRefusesAPageForTheFile(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = c.Close() })
 			c.tokenEndpointForTest, c.graphURLForTest = tokens.URL, srv.URL
+			routeHostTo(c, srv, "contoso-my.sharepoint.com")
 
 			data, _, err := c.FetchSharedFile(context.Background(), SharedFile{
 				Name:     tc.file,
 				ItemID:   "00000000-0000-0000-0000-0000000000f1",
-				SiteURL:  srv.URL + "/personal/bob/",
+				SiteURL:  "https://contoso-my.sharepoint.com/personal/bob/",
 				ShareURL: "https://contoso-my.sharepoint.com/:b:/g/personal/bob/EabcXYZ",
 			})
 			if tc.want == "" {
@@ -720,7 +722,7 @@ func TestDownloadsRefuseOversizedAndCutBodies(t *testing.T) {
 }
 
 func TestFetchAttachmentKeepsTokenFromThirdParties(t *testing.T) {
-	giphy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	giphy := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if auth := r.Header.Get("Authorization"); auth != "" {
 			t.Errorf("third-party host received %q", auth)
 		}
@@ -728,7 +730,8 @@ func TestFetchAttachmentKeepsTokenFromThirdParties(t *testing.T) {
 	}))
 	t.Cleanup(giphy.Close)
 	c := newAMSClient(t, "https://at-prod.asyncgw.teams.microsoft.com")
-	if data, _, err := c.FetchAttachment(context.Background(), giphy.URL+"/media/x.gif"); err != nil || string(data) != "gif" {
+	routeHostTo(c, giphy, "media.giphy.com")
+	if data, _, err := c.FetchAttachment(context.Background(), "https://media.giphy.com/media/x.gif"); err != nil || string(data) != "gif" {
 		t.Fatalf("got %q, %v", data, err)
 	}
 	for raw, want := range map[string]bool{
@@ -762,10 +765,12 @@ func TestFetchAttachmentSendsTokenToTheBaseHostOnlyOverItsScheme(t *testing.T) {
 	c := newAMSClient(t, base.URL)
 	c.http = base.Client()
 
-	for _, u := range []string{base.URL, plain.URL} {
-		if data, _, err := c.FetchAttachment(context.Background(), u+"/v1/objects/0-x/views/imgo"); err != nil || string(data) != "img" {
-			t.Fatalf("%s: got %q, %v", u, data, err)
-		}
+	if data, _, err := c.FetchAttachment(context.Background(), base.URL+"/v1/objects/0-x/views/imgo"); err != nil || string(data) != "img" {
+		t.Fatalf("%s: got %q, %v", base.URL, data, err)
+	}
+	// The base host over plain http is no media host at all: not fetched.
+	if _, _, err := c.FetchAttachment(context.Background(), plain.URL+"/v1/objects/0-x/views/imgo"); !errors.Is(err, ErrUnlistedMediaHost) {
+		t.Fatalf("%s: err = %v, want ErrUnlistedMediaHost", plain.URL, err)
 	}
 	if overTLS != "skype_token skype-fresh" {
 		t.Errorf("base host over https got Authorization %q, want the skype token", overTLS)
@@ -1115,4 +1120,24 @@ func TestFetchCustomEmoji(t *testing.T) {
 			t.Errorf("%s: %v, %s of %d bytes", tc.name, err, mimeType, len(data))
 		}
 	}
+}
+
+// routeHostTo sends c's connections for hosts to srv, a TLS test server,
+// so a test can stand in for a named Microsoft or Giphy host.
+func routeHostTo(c *Client, srv *httptest.Server, hosts ...string) {
+	base := srv.Client().Transport.(*http.Transport).Clone()
+	base.TLSClientConfig.InsecureSkipVerify = true
+	var dialer net.Dialer
+	base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, _ := net.SplitHostPort(addr)
+		for _, h := range hosts {
+			if host == h {
+				return dialer.DialContext(ctx, network, srv.Listener.Addr().String())
+			}
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+	client := *c.http
+	client.Transport = base
+	c.http = &client
 }

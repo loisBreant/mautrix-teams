@@ -609,13 +609,19 @@ var ErrDeviceCodeExpired = errors.New("device code expired before login complete
 
 // ErrSignInBlocked is returned when the account's organisation refused the
 // sign-in: a Conditional Access policy (AADSTS53000 to 53004), the user not
-// being assigned to the application (AADSTS50105), or the application
-// disabled in the tenant (AADSTS7000112).
+// being assigned to the application (AADSTS50105), the application disabled
+// in the tenant (AADSTS7000112), consent the tenant withholds (AADSTS65001,
+// 90094, 90095), or the application not allowed in the tenant (AADSTS700016,
+// 500011).
 var ErrSignInBlocked = errors.New("sign-in blocked by the organisation's policy")
 
 func blockedByOrganisation(codes []int) bool {
 	for _, c := range codes {
-		if (c >= 53000 && c <= 53004) || c == 50105 || c == 7000112 {
+		switch {
+		case c >= 53000 && c <= 53004, c == 50105, c == 7000112,
+			// Consent: admin consent required (65001, 90094, 90095), and the
+			// application not found or not allowed in the tenant (700016, 500011).
+			c == 65001, c == 90094, c == 90095, c == 700016, c == 500011:
 			return true
 		}
 	}
@@ -734,6 +740,11 @@ func PollDeviceCode(ctx context.Context, httpClient *http.Client, tenant string,
 			}, nil
 		}
 
+		// An organisation's refusal can come with any error, access_denied
+		// included: its codes decide before the error name does.
+		if blockedByOrganisation(tok.ErrorCodes) {
+			return nil, fmt.Errorf("%w: %s", ErrSignInBlocked, tok.ErrorDesc)
+		}
 		switch tok.Error {
 		case "authorization_pending":
 			timer.Reset(interval)
@@ -745,9 +756,6 @@ func PollDeviceCode(ctx context.Context, httpClient *http.Client, tenant string,
 		case "authorization_declined", "access_denied":
 			return nil, ErrDeviceCodeDeclined
 		default:
-			if blockedByOrganisation(tok.ErrorCodes) {
-				return nil, fmt.Errorf("%w: %s", ErrSignInBlocked, tok.ErrorDesc)
-			}
 			return nil, fmt.Errorf("token endpoint: %s: %s", tok.Error, tok.ErrorDesc)
 		}
 	}

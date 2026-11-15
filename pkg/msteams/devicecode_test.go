@@ -74,3 +74,19 @@ func TestPollDeviceCodeReportsAnOrganisationBlock(t *testing.T) {
 		t.Errorf("AADSTS70000 reported as a block")
 	}
 }
+
+// Consent and app-registration refusals are the organisation's too, and an
+// error code wins over the generic access_denied: a policy refusal that
+// comes back as access_denied is not "the user declined".
+func TestPollDeviceCodeReportsConsentRefusalsAsABlock(t *testing.T) {
+	for _, code := range []string{"65001", "90094", "90095", "700016", "500011"} {
+		body := `{"error":"invalid_grant","error_codes":[` + code + `]}`
+		if _, err := PollDeviceCode(context.Background(), answering(body), "common", false, "dc", time.Millisecond); !errors.Is(err, ErrSignInBlocked) {
+			t.Errorf("AADSTS%s: err = %v, want ErrSignInBlocked", code, err)
+		}
+	}
+	body := `{"error":"access_denied","error_codes":[53003]}`
+	if _, err := PollDeviceCode(context.Background(), answering(body), "common", false, "dc", time.Millisecond); !errors.Is(err, ErrSignInBlocked) {
+		t.Errorf("access_denied with AADSTS53003: err = %v, want ErrSignInBlocked", err)
+	}
+}

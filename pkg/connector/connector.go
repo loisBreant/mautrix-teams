@@ -175,7 +175,9 @@ func accountKind(id networkid.UserLoginID) string {
 func (tc *TeamsConnector) Start(ctx context.Context) error {
 	// Synchronous so GetName() has the icon before the first login triggers
 	// personal-space / management-room creation.
-	tc.uploadNetworkIcon(ctx)
+	if tc.Config.ShouldUploadNetworkIcon() {
+		tc.uploadNetworkIcon(ctx)
+	}
 	if mc, ok := tc.br.Matrix.(*matrix.Connector); ok {
 		if tc.Config.MatrixToTeams.Pins() {
 			mc.EventProcessor.On(event.StatePinnedEvents, tc.handleMatrixPins)

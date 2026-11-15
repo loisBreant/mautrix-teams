@@ -42,12 +42,16 @@ func (t *TeamsClient) syncChats(ctx context.Context) {
 		log.Err(err).Msg("Failed to list chats")
 		return
 	}
-	teams := t.fetchTeams(ctx)
+	cfg := t.Main.Config
+	// The teams list names channels and their spaces: not asked for when
+	// channels are not synced.
+	var teams []msteams.Team
+	if cfg.SyncChannels {
+		teams = t.fetchTeams(ctx)
+	}
 	channelToTeam := indexChannelTeams(teams)
 	t.queueTeamSpaces(ctx, teams)
-	cfg := t.Main.Config
 	t.queueMeetingsSpace(ctx, chats, cfg)
-	t.prefetchProfiles(ctx, chats)
 	queued := 0
 	skipped := map[string]int{}
 	eligible := make([]msteams.Chat, 0, len(chats))
@@ -70,6 +74,8 @@ func (t *TeamsClient) syncChats(ctx context.Context) {
 			skipped["conversation_count"]++
 		}
 	}
+	// Profiles only for the chats that get a room now.
+	t.prefetchProfiles(ctx, keep)
 	for i := range keep {
 		chat := keep[i]
 		log.Debug().

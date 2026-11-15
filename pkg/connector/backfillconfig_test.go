@@ -142,3 +142,21 @@ func TestLoginErrorsCarryErrcodes(t *testing.T) {
 		t.Errorf("loginWaitError(other) = %v, want it unchanged", got)
 	}
 }
+
+func TestNetworkIconUploadFollowsTheConfig(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(ExampleConfig), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ShouldUploadNetworkIcon() {
+		t.Error("the example config keeps the icon out")
+	}
+	off := false
+	cfg.UploadNetworkIcon = &off
+	if cfg.ShouldUploadNetworkIcon() {
+		t.Error("upload_network_icon: false still uploads the icon")
+	}
+	if !(&Config{}).ShouldUploadNetworkIcon() {
+		t.Error("an absent key keeps the icon out; want the upstream default")
+	}
+}

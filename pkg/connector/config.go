@@ -53,6 +53,11 @@ type Config struct {
 	// Matrix→Teams deletes are always permanent.
 	MarkDeletedAsEdit bool `yaml:"mark_deleted_as_edit"`
 
+	// UploadNetworkIcon, when false, keeps the Teams logo out of Matrix:
+	// rooms and the bridge's space get no avatar from it. Defaults to true
+	// when omitted.
+	UploadNetworkIcon *bool `yaml:"upload_network_icon"`
+
 	// Presence controls which presence-like signals the bridge forwards in
 	// each direction. Defaults (empty) are bidirectional: typing/read from
 	// Matrix are pushed to Teams and vice-versa. Setting a SendMatrix… flag
@@ -115,6 +120,12 @@ func (c *Config) ShouldSyncMeetingChats() bool {
 		return true
 	}
 	return *c.SyncMeetingChats
+}
+
+// ShouldUploadNetworkIcon reports whether the Teams logo is uploaded and used
+// as the network icon. Defaults to true when the key is absent.
+func (c *Config) ShouldUploadNetworkIcon() bool {
+	return c == nil || c.UploadNetworkIcon == nil || *c.UploadNetworkIcon
 }
 
 // SendTyping reports whether Matrix typing EDUs should be pushed to Teams.
@@ -241,6 +252,7 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Str, "chat_name_template")
 	helper.Copy(up.Bool, "mute_chats_by_default")
 	helper.Copy(up.Bool, "mark_deleted_as_edit")
+	helper.Copy(up.Bool, "upload_network_icon")
 	helper.Copy(up.Bool, "sync_meeting_chats")
 	helper.Copy(up.Bool, "sync_system_threads")
 	helper.Copy(up.Bool, "sync_channels")

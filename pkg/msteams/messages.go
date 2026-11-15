@@ -669,6 +669,37 @@ func (c *Client) isAMSHost(u *url.URL) bool {
 	return false
 }
 
+// ErrUnlistedMediaHost is returned for an attachment URL outside Teams'
+// media hosts and the sticker and Giphy hosts: a message's sender chooses
+// that URL, and fetching it would tell any host the bridge's address and
+// reach addresses inside the bridge's own network.
+var ErrUnlistedMediaHost = errors.New("attachment host is not a Microsoft or Giphy media host")
+
+// mediaHostSuffixes are the hosts besides Teams' own media hosts that
+// stickers and Giphy images are fetched from, over https only.
+var mediaHostSuffixes = []string{".teams.cdn.office.net", ".giphy.com"}
+
+// fetchableMedia reports whether an attachment URL may be fetched at all:
+// a Teams media host, or an https sticker or Giphy host with no userinfo.
+func (c *Client) fetchableMedia(u *url.URL) bool {
+	if u.User != nil {
+		return false
+	}
+	if c.isAMSHost(u) {
+		return true
+	}
+	if u.Scheme != "https" || u.Port() != "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, suffix := range mediaHostSuffixes {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) fetchAMS(ctx context.Context, attachmentURL, skype string, limit int64) ([]byte, string, error) {
 	if skype == "" {
 		return nil, "", ErrUnauthorized
@@ -677,12 +708,29 @@ func (c *Client) fetchAMS(ctx context.Context, attachmentURL, skype string, limi
 	if err != nil {
 		return nil, "", err
 	}
+	if !c.fetchableMedia(req.URL) {
+		return nil, "", ErrUnlistedMediaHost
+	}
 	authed := c.isAMSHost(req.URL)
 	if authed {
 		req.Header.Set("Authorization", "skype_token "+skype)
 	}
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
-	resp, err := c.http.Do(req)
+	// Every redirect hop is held to the same hosts.
+	hc := *c.http
+	previous := hc.CheckRedirect
+	hc.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if previous != nil {
+			if err := previous(next, via); err != nil {
+				return err
+			}
+		}
+		if !c.fetchableMedia(next.URL) {
+			return ErrUnlistedMediaHost
+		}
+		return nil
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -874,6 +922,11 @@ func sharedFileDownloadEndpoint(f SharedFile) (endpoint, host string, err error)
 	u, err := url.Parse(source)
 	if err != nil || u.Host == "" {
 		return "", "", fmt.Errorf("parse site url: %w", err)
+	}
+	// The sender of a shared file chooses this URL, and a SharePoint token
+	// is minted for its host and posted to it: SharePoint over https only.
+	if host := strings.ToLower(u.Host); u.Scheme != "https" || u.User != nil || !strings.HasSuffix(host, ".sharepoint.com") {
+		return "", "", fmt.Errorf("shared file is not on SharePoint: %s", u.Host)
 	}
 	path := u.Path
 	if f.SiteURL == "" {
