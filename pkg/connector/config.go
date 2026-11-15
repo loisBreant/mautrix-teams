@@ -18,6 +18,7 @@ package connector
 
 import (
 	_ "embed"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -73,8 +74,28 @@ type Config struct {
 }
 
 type BackfillConfig struct {
-	ConversationCount int  `yaml:"conversation_count"`
-	Enabled           bool `yaml:"enabled"`
+	// ConversationCount is how many chats get a room when the bridge syncs on
+	// startup: the most recently active ones. Negative means every chat, 0
+	// none. A chat left out still gets its room when a message arrives in it.
+	ConversationCount int `yaml:"conversation_count"`
+	// Enabled, when false, stops the bridge from fetching any message
+	// history from Teams: new rooms start empty and missed messages are not
+	// caught up.
+	Enabled bool `yaml:"enabled"`
+}
+
+// startupChats splits chats into the ones the startup sync gives a room
+// (the ConversationCount most recently active, ties in list order) and the
+// rest. A chat Teams reports no activity time for sorts last.
+func (c BackfillConfig) startupChats(chats []msteams.Chat) (keep, rest []msteams.Chat) {
+	sorted := append([]msteams.Chat(nil), chats...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].LastUpdated.After(sorted[j].LastUpdated)
+	})
+	if c.ConversationCount < 0 || len(sorted) <= c.ConversationCount {
+		return sorted, nil
+	}
+	return sorted[:c.ConversationCount], sorted[c.ConversationCount:]
 }
 
 // PresenceConfig toggles the two outbound presence channels to Teams. The

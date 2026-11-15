@@ -18,6 +18,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -154,6 +155,39 @@ func (l *TeamsDeviceCodeLogin) startDeviceCode(ctx context.Context) (*bridgev2.L
 
 func (l *TeamsDeviceCodeLogin) Cancel() {}
 
+// The ordinary ends of a device-code login, as errcodes a client can tell
+// apart from a fault: the code ran out, the user declined, or the
+// organisation's policy refused the sign-in.
+var (
+	ErrLoginExpired = bridgev2.RespError{
+		ErrCode:    "FI.MAU.TEAMS.LOGIN_EXPIRED",
+		Err:        "The sign-in code expired before the login was approved",
+		StatusCode: http.StatusBadRequest,
+	}
+	ErrLoginDeclined = bridgev2.RespError{
+		ErrCode:    "FI.MAU.TEAMS.LOGIN_DECLINED",
+		Err:        "The login was declined on Microsoft's sign-in page",
+		StatusCode: http.StatusBadRequest,
+	}
+	ErrLoginBlocked = bridgev2.RespError{
+		ErrCode:    "FI.MAU.TEAMS.LOGIN_BLOCKED",
+		Err:        "The account's organisation does not allow this sign-in",
+		StatusCode: http.StatusForbidden,
+	}
+)
+
+func loginWaitError(err error) error {
+	switch {
+	case errors.Is(err, msteams.ErrDeviceCodeExpired):
+		return ErrLoginExpired
+	case errors.Is(err, msteams.ErrDeviceCodeDeclined):
+		return ErrLoginDeclined
+	case errors.Is(err, msteams.ErrSignInBlocked):
+		return ErrLoginBlocked
+	}
+	return err
+}
+
 func (l *TeamsDeviceCodeLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, error) {
 	if l.deviceCode == "" {
 		return nil, fmt.Errorf("device code login not started")
@@ -164,7 +198,7 @@ func (l *TeamsDeviceCodeLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, e
 	}
 	tok, err := msteams.PollDeviceCode(ctx, http.DefaultClient, pollTenant, l.personal, l.deviceCode, l.interval)
 	if err != nil {
-		return nil, fmt.Errorf("poll device code: %w", err)
+		return nil, loginWaitError(fmt.Errorf("poll device code: %w", err))
 	}
 
 	claims, err := msteams.ParseIDToken(tok.IDToken)

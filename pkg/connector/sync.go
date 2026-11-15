@@ -50,12 +50,28 @@ func (t *TeamsClient) syncChats(ctx context.Context) {
 	t.prefetchProfiles(ctx, chats)
 	queued := 0
 	skipped := map[string]int{}
+	eligible := make([]msteams.Chat, 0, len(chats))
 	for i := range chats {
-		chat := chats[i]
-		if reason := t.skipReasonFor(&chat, cfg); reason != "" {
+		if reason := t.skipReasonFor(&chats[i], cfg); reason != "" {
 			skipped[reason]++
 			continue
 		}
+		eligible = append(eligible, chats[i])
+	}
+	// backfill.conversation_count: only the most recently active chats get a
+	// new room at startup. A chat beyond the count that already has one keeps
+	// being resynced; the others get theirs when a message arrives.
+	keep, rest := cfg.Backfill.startupChats(eligible)
+	for i := range rest {
+		key := teamsid.MakePortalKey(rest[i].ID, t.UserLogin.ID, t.splitPortals())
+		if portal, err := t.Main.br.GetExistingPortalByKey(ctx, key); err == nil && portal != nil && portal.MXID != "" {
+			keep = append(keep, rest[i])
+		} else {
+			skipped["conversation_count"]++
+		}
+	}
+	for i := range keep {
+		chat := keep[i]
 		log.Debug().
 			Str("thread", chat.ID).
 			Str("type", string(chat.Type)).

@@ -93,6 +93,7 @@ type oauthTokenResponse struct {
 	Scope        string `json:"scope"`
 	Error        string `json:"error,omitempty"`
 	ErrorDesc    string `json:"error_description,omitempty"`
+	ErrorCodes   []int  `json:"error_codes,omitempty"`
 }
 
 // authzResponse matches teams.microsoft.com/api/authsvc/v1.0/authz.
@@ -602,6 +603,25 @@ type DeviceCodeToken struct {
 // than retry.
 var ErrDeviceCodeDeclined = errors.New("device code login declined by user")
 
+// ErrDeviceCodeExpired is returned when the device code expired before the
+// user finished the browser sign-in.
+var ErrDeviceCodeExpired = errors.New("device code expired before login completed")
+
+// ErrSignInBlocked is returned when the account's organisation refused the
+// sign-in: a Conditional Access policy (AADSTS53000 to 53004), the user not
+// being assigned to the application (AADSTS50105), or the application
+// disabled in the tenant (AADSTS7000112).
+var ErrSignInBlocked = errors.New("sign-in blocked by the organisation's policy")
+
+func blockedByOrganisation(codes []int) bool {
+	for _, c := range codes {
+		if (c >= 53000 && c <= 53004) || c == 50105 || c == 7000112 {
+			return true
+		}
+	}
+	return false
+}
+
 // StartDeviceCode opens an OAuth device-code flow against the Microsoft
 // identity platform with the Teams client of the account type. tenant should
 // be "organizations" for work/school accounts, or a tenant GUID when already
@@ -721,10 +741,13 @@ func PollDeviceCode(ctx context.Context, httpClient *http.Client, tenant string,
 			interval += 5 * time.Second
 			timer.Reset(interval)
 		case "expired_token", "code_expired":
-			return nil, fmt.Errorf("device code expired before login completed")
+			return nil, ErrDeviceCodeExpired
 		case "authorization_declined", "access_denied":
 			return nil, ErrDeviceCodeDeclined
 		default:
+			if blockedByOrganisation(tok.ErrorCodes) {
+				return nil, fmt.Errorf("%w: %s", ErrSignInBlocked, tok.ErrorDesc)
+			}
 			return nil, fmt.Errorf("token endpoint: %s: %s", tok.Error, tok.ErrorDesc)
 		}
 	}

@@ -328,14 +328,14 @@ func (t *TeamsClient) showCodeMeeting(ctx context.Context, roomID id.RoomID, mee
 		}
 		return errors.New("this room already shows a call")
 	}
-	member, err := matrixrtc.Join(ctx, intent.Matrix, roomID, intent.Matrix.UserID, ghostCallDevice, transport)
+	member, err := matrixrtc.Join(ctx, intent.Matrix(), roomID, intent.Matrix().UserID, ghostCallDevice, transport)
 	if err != nil {
 		return err
 	}
-	if _, err := intent.Matrix.SendMessageEvent(ctx, roomID, matrixrtc.NotificationEvent, matrixrtc.NotificationContent(member.EventID, time.Now())); err != nil {
+	if _, err := intent.Matrix().SendMessageEvent(ctx, roomID, matrixrtc.NotificationEvent, matrixrtc.NotificationContent(member.EventID, time.Now())); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to announce the call")
 	}
-	call := &liveCall{member: member, code: &meeting, ghost: intent.Matrix, expires: time.Now().Add(codeMeetingIdle)}
+	call := &liveCall{member: member, code: &meeting, ghost: intent.Matrix(), expires: time.Now().Add(codeMeetingIdle)}
 	if t.liveCalls == nil {
 		t.liveCalls = map[id.RoomID]*liveCall{}
 	}

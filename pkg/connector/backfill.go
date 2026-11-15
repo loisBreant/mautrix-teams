@@ -32,6 +32,10 @@ import (
 var _ bridgev2.BackfillingNetworkAPI = (*TeamsClient)(nil)
 
 func (t *TeamsClient) FetchMessages(ctx context.Context, params bridgev2.FetchMessagesParams) (*bridgev2.FetchMessagesResponse, error) {
+	// backfill.enabled: false fetches no history at all, before any request.
+	if !t.Main.Config.Backfill.Enabled {
+		return &bridgev2.FetchMessagesResponse{Forward: params.Forward}, nil
+	}
 	if !t.IsLoggedIn() {
 		return nil, bridgev2.ErrNotLoggedIn
 	}
